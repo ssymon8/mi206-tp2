@@ -7,7 +7,7 @@ from scipy import ndimage as ndi
 from skimage.util import img_as_ubyte
 from skimage.exposure import equalize_adapthist
 import math
-from skimage import data, filters
+from skimage import data, filters, util
 from scipy.signal import convolve2d
 from matplotlib import pyplot as plt
 import cv2
@@ -52,17 +52,20 @@ def my_segmentation(img, img_mask, seuil):
     # CAPILLAIRES --------------------------------------------------------------
     # centerline candidates highlighting
     kernel = np.array([
-        [-1, -2, 0, 2, 1],
-        [-2, -4, 0, 4, 2],
-        [-1, -2, 0, 2, 1]
+        [-1, -5, 0, 5, 1],
+        [-2, -10, 0, 10, 2],
+        [-1, -5, 0, 5, 1]
     ])
     img_capil = np.zeros((512, 512))
+
+
     
     img_contrast = equalize_adapthist(img)
 
     for i in range(0, 181, 20):
-        img_rota = ndi.rotate(img_contrast, i)
-        img_convolve = convolve2d(img_rota, kernel)
+        img_rota1 = ndi.rotate(img_contrast, i)
+        img_rota= util.invert(img_rota1)
+        img_convolve = filters.difference_of_gaussians(img_rota, low_sigma= 1)
         img_straight = ndi.rotate(img_convolve, -i)
         
         w, h = img_straight.shape
@@ -116,7 +119,7 @@ def my_segmentation(img, img_mask, seuil):
     plt.subplot(131)
     plt.imshow(img_venules, cmap='gray')
     plt.subplot(132)
-    plt.imshow(refined_centerlines, cmap='gray')
+    plt.imshow(img_capil, cmap='gray')
     plt.subplot(133)
     plt.imshow(img_out, cmap='gray')
     plt.show()
