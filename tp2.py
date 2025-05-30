@@ -12,30 +12,12 @@ from scipy.signal import convolve2d
 from matplotlib import pyplot as plt
 import cv2
 
-def my_segmentation(img, img_mask, seuil):
+def my_segmentation(img, img_mask):
     # inversion des couleurs et on enleve l'anneau
     img_greyscale = (255*img_mask & (np.invert(img)))
     unique2, counts2 = np.unique(img_greyscale, return_counts=True)
 
     # VEINES -------------------------------------------------------------------
-    
-    # white top hat
-    #footprint = np.array([
-    #    [0, 0, 1, 0, 0],
-    #    [0, 0, 1, 0, 0],
-    #    [1, 1, 1, 1, 1],
-    #    [0, 0, 1, 0, 0],
-    #    [0, 0, 1, 0, 0]
-    #])
-    footprint = np.array([
-        [0, 0, 1, 1, 1, 0, 0],
-        [0, 0, 1, 1, 1, 0, 0],
-        [1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1, 1, 1],
-        [1, 1, 1, 1, 1, 1, 1],
-        [0, 0, 1, 1, 1, 0, 0],
-        [0, 0, 1, 1, 1, 0, 0]
-    ])
     img_tophat = white_tophat(img_greyscale, star(5))
 
 
@@ -47,22 +29,32 @@ def my_segmentation(img, img_mask, seuil):
 
     # seuil de l'intensité
     seuil = 25
-    img_venules = img_tophat > seuil
+    img_seuil = img_tophat > seuil
+
+    img_venules = img_seuil
+
+    seuil_uint8 = (img_seuil * 255).astype(np.uint8)
+        
+    # Find connected components
+    num_labels, labels = cv2.connectedComponents(seuil_uint8)
+    
+    img_venules = np.zeros_like(img_seuil)
+    
+    for label in range(1, num_labels):
+        component = (labels == label)
+        component_size = np.sum(component)
+        
+        # Keep only components of reasonable size (filter out noise)
+        if component_size > 30:  # Minimum length for capillaries
+            # Additional refinement can be added here
+            img_venules |= component
 
     # CAPILLAIRES --------------------------------------------------------------
     # centerline candidates highlighting
-    kernel = np.array([
-        [-1, -5, 0, 5, 1],
-        [-2, -10, 0, 10, 2],
-        [-1, -5, 0, 5, 1]
-    ])
     img_capil = np.zeros((512, 512))
-
-
-    
     img_contrast = equalize_adapthist(img)
 
-    for i in range(0, 181, 20):
+    for i in range(0, 181, 10):
         img_rota1 = ndi.rotate(img_contrast, i)
         img_rota= util.invert(img_rota1)
         img_convolve = filters.difference_of_gaussians(img_rota, low_sigma= 1)
@@ -78,25 +70,9 @@ def my_segmentation(img, img_mask, seuil):
 
         img_cropped = img_straight[top:bottom, left:right]
         img_capil += img_cropped
-
-    sigmas = np.arange(1, 10, 2)
-        
-    # Apply Frangi filter
-    vessel_response = filters.frangi(img_contrast, sigmas=sigmas, scale_range=None,
-                                    scale_step=None, alpha=0.5, beta=10, gamma=15)
     
-    # Threshold the response
-    threshold = filters.threshold_otsu(vessel_response)
-    vessel_mask = vessel_response > threshold * 0.5 
-    cleaned_mask = remove_small_objects(vessel_mask, min_size=5)
-    
-    # Fill small holes
-    filled_mask = ndi.binary_fill_holes(cleaned_mask)
-    
-    # Skeletonize to get centerlines
-    skeleton = skeletonize(filled_mask)
-    
-    # Remove small disconnected components
+    img_capillaires = img_capil > 0.2
+    skeleton = skeletonize(img_capillaires)
 
     centerlines_uint8 = (skeleton * 255).astype(np.uint8)
         
@@ -110,16 +86,25 @@ def my_segmentation(img, img_mask, seuil):
         component_size = np.sum(component)
         
         # Keep only components of reasonable size (filter out noise)
-        if component_size > 10:  # Minimum length for capillaries
+        if component_size > 30:  # Minimum length for capillaries
             # Additional refinement can be added here
             refined_centerlines |= component
+    
+    
 
-    img_out = 1*img_venules + 1*refined_centerlines
-    img_out = np.clip(img_out, 0, 1)
+    img_preout = 255*img_venules + 255*refined_centerlines
+    img_preout = np.clip(img_preout, 0, 1)
+
+    circle_mask = np.zeros_like(img_preout, np.uint8)
+    circle_mask = cv2.circle(circle_mask, (256, 256), 253, (1, 1, 1), -1)
+
+    img_out = img_preout & circle_mask
+
+
     plt.subplot(131)
-    plt.imshow(img_venules, cmap='gray')
+    plt.imshow(img_preout, cmap='gray')
     plt.subplot(132)
-    plt.imshow(img_capil, cmap='gray')
+    plt.imshow(circle_mask, cmap='gray')
     plt.subplot(133)
     plt.imshow(img_out, cmap='gray')
     plt.show()
@@ -137,7 +122,7 @@ def evaluate(img_out, img_GT):
     return ACCU, RECALL, img_out_skel, GT_skel
 
 #Ouvrir l'image originale en niveau de gris
-img =  np.asarray(Image.open('./images_IOSTAR/star01_OSC.jpg')).astype(np.uint8)
+img =  np.asarray(Image.open('./images_IOSTAR/star02_OSC.jpg')).astype(np.uint8)
 print(img.shape)
 
 nrows, ncols = img.shape
@@ -147,10 +132,10 @@ img_mask = (np.ones(img.shape)).astype(np.bool_)
 invalid_pixels = ((row - nrows/2)**2 + (col - ncols/2)**2 > (nrows / 2)**2)
 img_mask[invalid_pixels] = 0
 
-img_out = my_segmentation(img,img_mask,80)
+img_out = my_segmentation(img,img_mask)
 
 #Ouvrir l'image Verite Terrain en booleen
-img_GT =  np.asarray(Image.open('./images_IOSTAR/GT_01.png')).astype(np.uint8)
+img_GT =  np.asarray(Image.open('./images_IOSTAR/GT_02.png')).astype(np.uint8)
 
 ACCU, RECALL, img_out_skel, GT_skel = evaluate(img_out, img_GT)
 print('Accuracy =', ACCU,', Recall =', RECALL)
